@@ -1,0 +1,577 @@
+```{python}
+
+# Section 1: Import Libraries and Load Dataset
+
+import pandas as pd
+import numpy as np
+
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, LabelEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, roc_auc_score
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+
+from sklearn.linear_model import LinearRegression, LogisticRegression
+from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor, GradientBoostingClassifier
+from sklearn.svm import SVC
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+
+from sklearn.feature_selection import SequentialFeatureSelector
+from mlxtend.feature_selection import ExhaustiveFeatureSelector as EFS
+
+import warnings
+warnings.filterwarnings("ignore")
+
+df = pd.read_csv("paddydataset.csv")
+
+df.columns = df.columns.str.strip()
+
+print("Dataset shape:", df.shape)
+print(df.head())
+print(df.info())
+print(df.describe())
+
+
+
+```
+
+
+```{python}
+
+# Section 3: Data Cleaning and Feature Engineering
+
+target_regression = "Paddy yield(in Kg)"
+hectare_col = "Hectares"
+
+df["Yield_per_Hectare"] = df[target_regression] / df[hectare_col]
+
+median_yield = df["Yield_per_Hectare"].median()
+df["High_Yield"] = (df["Yield_per_Hectare"] >= median_yield).astype(int)
+
+print("Median Yield per Hectare:", median_yield)
+print(df["High_Yield"].value_counts())
+
+X = df.drop(columns=[target_regression, "Yield_per_Hectare", "High_Yield"])
+y_reg = df[target_regression]
+y_clf = df["High_Yield"]
+
+categorical_features = X.select_dtypes(include=["object"]).columns.tolist()
+numeric_features = X.select_dtypes(exclude=["object"]).columns.tolist()
+
+print("Categorical features:", categorical_features)
+print("Numeric features:", numeric_features)
+
+```
+
+
+```{python}
+
+# Section 4: Preprocessing Pipeline
+
+preprocessor = ColumnTransformer(
+    transformers=[
+        ("num", StandardScaler(), numeric_features),
+        ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_features)
+    ]
+)
+
+def get_feature_names(preprocessor, numeric_features, categorical_features):
+    cat_names = preprocessor.named_transformers_["cat"].get_feature_names_out(categorical_features)
+    feature_names = list(numeric_features) + list(cat_names)
+    return feature_names
+
+```
+
+
+```{python}
+
+# Section 5: Regression Models for Total Paddy Yield Prediction
+
+X_train_reg, X_test_reg, y_train_reg, y_test_reg = train_test_split(
+    X, y_reg, test_size=0.2, random_state=42
+)
+
+regression_models = {
+    "Linear Regression": LinearRegression(),
+    "Decision Tree Regressor": DecisionTreeRegressor(random_state=42),
+    "Random Forest Regressor": RandomForestRegressor(random_state=42, n_estimators=200)
+}
+
+regression_results = []
+
+for name, model in regression_models.items():
+    pipe = Pipeline(steps=[
+        ("preprocessor", preprocessor),
+        ("model", model)
+    ])
+    
+    pipe.fit(X_train_reg, y_train_reg)
+    y_pred = pipe.predict(X_test_reg)
+    
+    mae = mean_absolute_error(y_test_reg, y_pred)
+    rmse = np.sqrt(mean_squared_error(y_test_reg, y_pred))
+    r2 = r2_score(y_test_reg, y_pred)
+    
+    regression_results.append([name, mae, rmse, r2])
+
+regression_results_df = pd.DataFrame(
+    regression_results,
+    columns=["Model", "MAE", "RMSE", "R2"]
+)
+
+print(regression_results_df.sort_values(by="R2", ascending=False))
+
+```
+
+Among the three regression models, the Random Forest Regressor achieved the best predictive performance with the lowest MAE (632.34), the lowest RMSE (887.32), and the highest R² value (0.9903). This indicates that the model can explain approximately 99.03% of the variance in paddy yield and provides highly accurate yield predictions. The superior performance of the Random Forest model suggests that nonlinear relationships among agricultural practices, weather conditions, irrigation, and soil characteristics play an important role in determining paddy yield.
+
+
+```{python}
+
+# Section 6: Classification Models for High vs Low Yield
+
+X_train_clf, X_test_clf, y_train_clf, y_test_clf = train_test_split(
+    X, y_clf, test_size=0.2, random_state=42, stratify=y_clf
+)
+
+classification_models = {
+    "Decision Tree": DecisionTreeClassifier(random_state=42),
+    "Random Forest": RandomForestClassifier(random_state=42, n_estimators=200),
+    "SVM": SVC(probability=True, random_state=42),
+    "KNN": KNeighborsClassifier(n_neighbors=5),
+    "Naive Bayes": GaussianNB()
+}
+
+classification_results = []
+
+for name, model in classification_models.items():
+    
+    if name == "Naive Bayes":
+        X_train_processed = preprocessor.fit_transform(X_train_clf)
+        X_test_processed = preprocessor.transform(X_test_clf)
+        
+        if hasattr(X_train_processed, "toarray"):
+            X_train_processed = X_train_processed.toarray()
+            X_test_processed = X_test_processed.toarray()
+        
+        model.fit(X_train_processed, y_train_clf)
+        y_pred = model.predict(X_test_processed)
+        y_prob = model.predict_proba(X_test_processed)[:, 1]
+        
+    else:
+        pipe = Pipeline(steps=[
+            ("preprocessor", preprocessor),
+            ("model", model)
+        ])
+        
+        pipe.fit(X_train_clf, y_train_clf)
+        y_pred = pipe.predict(X_test_clf)
+        y_prob = pipe.predict_proba(X_test_clf)[:, 1]
+    
+    accuracy = accuracy_score(y_test_clf, y_pred)
+    auc = roc_auc_score(y_test_clf, y_prob)
+    
+    classification_results.append([name, accuracy, auc])
+
+classification_results_df = pd.DataFrame(
+    classification_results,
+    columns=["Model", "Accuracy", "ROC_AUC"]
+)
+
+print(classification_results_df.sort_values(by="ROC_AUC", ascending=False))
+
+
+
+```
+
+Five classification models were evaluated for predicting high-yield and low-yield paddy farms using Accuracy and ROC AUC as the evaluation metrics.
+
+Among the five models, SVM achieved the highest ROC AUC (0.9439), indicating the strongest ability to distinguish between high-yield and low-yield farms. Decision Tree achieved the highest classification accuracy (91.40%), while Random Forest also produced competitive performance with an accuracy of 91.04% and a ROC AUC of 0.9428.
+
+KNN achieved similar accuracy to SVM but showed slightly lower ROC AUC, indicating weaker overall discrimination ability. Naive Bayes produced the lowest performance among the five models, although it still achieved an accuracy above 90%, suggesting that all models performed reasonably well on this balanced dataset.
+
+Overall, all five classifiers demonstrated strong predictive performance, with Accuracy ranging from 90.14% to 91.40% and ROC AUC ranging from 0.9287 to 0.9439. Considering the overall classification capability, SVM was selected as the best classification model because it achieved the highest ROC AUC and demonstrated the strongest ability to separate high-yield and low-yield farms.
+
+
+
+```{python}
+
+# Section 7: Best Classification Model Evaluation
+
+best_model_name = classification_results_df.sort_values(
+    by="ROC_AUC", ascending=False
+).iloc[0]["Model"]
+
+print("Best classification model:", best_model_name)
+
+best_model = classification_models[best_model_name]
+
+if best_model_name == "Naive Bayes":
+    X_train_processed = preprocessor.fit_transform(X_train_clf)
+    X_test_processed = preprocessor.transform(X_test_clf)
+    
+    if hasattr(X_train_processed, "toarray"):
+        X_train_processed = X_train_processed.toarray()
+        X_test_processed = X_test_processed.toarray()
+    
+    best_model.fit(X_train_processed, y_train_clf)
+    y_pred_best = best_model.predict(X_test_processed)
+
+else:
+    best_pipe = Pipeline(steps=[
+        ("preprocessor", preprocessor),
+        ("model", best_model)
+    ])
+    
+    best_pipe.fit(X_train_clf, y_train_clf)
+    y_pred_best = best_pipe.predict(X_test_clf)
+
+print("Classification Report:")
+print(classification_report(y_test_clf, y_pred_best))
+
+print("Confusion Matrix:")
+print(confusion_matrix(y_test_clf, y_pred_best))
+
+```
+
+
+Based on the ROC AUC results, SVM was selected as the best classification model for predicting high-yield and low-yield paddy farms.
+
+The model achieved an overall classification accuracy of 90.86%, with a weighted F1-score of 0.91, indicating strong and balanced predictive performance. The confusion matrix shows that 507 out of 558 samples were correctly classified, while only 51 samples were misclassified.
+
+For the low-yield class (Class 0), the model achieved a precision of 0.97 and a recall of 0.84, indicating that most predicted low-yield farms were correct, although some actual low-yield farms were classified as high-yield.
+
+For the high-yield class (Class 1), the model achieved a precision of 0.86 and an excellent recall of 0.98, meaning that nearly all high-yield farms were successfully identified by the model. This makes the model particularly effective at detecting high-yield farms, which is valuable for agricultural planning and yield management.
+
+Overall, the SVM classifier demonstrated excellent discrimination ability, high classification accuracy, and balanced precision and recall, making it the most suitable model for the paddy yield classification task.
+
+
+
+```{python}
+
+# Section 8: Prepare Encoded Dataset for Feature Selection
+
+X_encoded = preprocessor.fit_transform(X)
+
+if hasattr(X_encoded, "toarray"):
+    X_encoded = X_encoded.toarray()
+
+feature_names = get_feature_names(preprocessor, numeric_features, categorical_features)
+
+X_encoded_df = pd.DataFrame(X_encoded, columns=feature_names)
+
+print("Encoded dataset shape:", X_encoded_df.shape)
+print(X_encoded_df.head())
+
+
+```
+
+
+```{python}
+
+# Section 9: Feature Selection Method 1 - Stepwise Forward Selection
+
+forward_model = LogisticRegression(max_iter=1000)
+
+forward_selector = SequentialFeatureSelector(
+    forward_model,
+    n_features_to_select=10,
+    direction="forward",
+    scoring="roc_auc",
+    cv=5
+)
+
+forward_selector.fit(X_encoded_df, y_clf)
+
+forward_features = X_encoded_df.columns[forward_selector.get_support()].tolist()
+
+print("Forward Selection Features:")
+print(forward_features)
+
+```
+
+
+Stepwise Forward Selection identified ten features that provide the best predictive performance for classifying high-yield and low-yield paddy farms. The selected features include field size (Hectares), seed rate, land preparation inputs, nursery characteristics, fertilizer application, weed control, micronutrient application, minimum temperature, and wind speed.
+
+The selected features indicate that paddy yield is influenced by a combination of farm management practices, fertilizer usage, environmental conditions, and weather factors rather than a single variable. Among them, Hectares, Seedrate, and fertilizer-related variables suggest that crop management plays an important role, while minimum temperature and wind speed demonstrate the influence of climatic conditions on rice production.
+
+
+
+```{python}
+
+# Section 10: Feature Selection Method 2 - Backward Elimination
+
+backward_model = LogisticRegression(max_iter=1000)
+
+backward_selector = SequentialFeatureSelector(
+    backward_model,
+    n_features_to_select=10,
+    direction="backward",
+    scoring="roc_auc",
+    cv=5
+)
+
+backward_selector.fit(X_encoded_df, y_clf)
+
+backward_features = X_encoded_df.columns[backward_selector.get_support()].tolist()
+
+print("Backward Elimination Features:")
+print(backward_features)
+
+
+```
+
+
+Backward Elimination selected ten features that contributed most significantly to the classification of high-yield and low-yield paddy farms after removing less informative variables. The selected features mainly include fertilizer application (Urea, Potash, and Micronutrients), pest control, and several wind direction variables during different growth stages.
+
+The results suggest that nutrient management and pest control are important factors affecting paddy yield. In addition, the selection of multiple wind direction variables indicates that weather conditions, particularly prevailing wind patterns during different growth periods, may have a measurable impact on crop development and final yield.
+
+Compared with Forward Selection, Backward Elimination retained a different set of variables, highlighting that multiple combinations of agricultural management practices and environmental factors can effectively explain yield variation. Overall, the selected feature subset provides a compact and informative representation of the original dataset for subsequent machine learning modeling.
+
+
+
+```{python}
+
+# Section 11: Feature Selection Method 3 - Random Forest Feature Importance
+
+rf_fs = RandomForestClassifier(random_state=42, n_estimators=200)
+rf_fs.fit(X_encoded_df, y_clf)
+
+rf_importance = pd.DataFrame({
+    "Feature": X_encoded_df.columns,
+    "Importance": rf_fs.feature_importances_
+}).sort_values(by="Importance", ascending=False)
+
+rf_features = rf_importance.head(10)["Feature"].tolist()
+
+print("Random Forest Important Features:")
+print(rf_features)
+
+print(rf_importance.head(15))
+
+```
+
+
+Random Forest Feature Importance identified the variables that contributed most to predicting high-yield and low-yield paddy farms based on their relative importance scores. The most influential features were LP_Mainfield(in Tonnes), Pest_60Day(in ml), Hectares, Seedrate(in Kg), Trash(in bundles), LP_nurseryarea(in Tonnes), Nursery area (Cents), DAP_20days, Micronutrients_70Days, and Potassh_50Days.
+
+The results indicate that field management practices, including land preparation, seed rate, nursery management, fertilizer application, and pest control, play a dominant role in determining paddy yield. In particular, LP_Mainfield(in Tonnes) was identified as the most important predictor, followed by pest control and field size, suggesting that proper field preparation and crop management have a significant impact on yield performance.
+
+In comparison, categorical variables such as rice variety and soil type received relatively low importance scores, indicating that management practices and cultivation inputs contributed more to yield prediction than the categorical characteristics in this dataset.
+
+
+
+
+```{python}
+
+# Section 12: Feature Selection Method 4 - Gradient Boosting Feature Importance
+
+gb_fs = GradientBoostingClassifier(random_state=42)
+gb_fs.fit(X_encoded_df, y_clf)
+
+gb_importance = pd.DataFrame({
+    "Feature": X_encoded_df.columns,
+    "Importance": gb_fs.feature_importances_
+}).sort_values(by="Importance", ascending=False)
+
+gb_features = gb_importance.head(10)["Feature"].tolist()
+
+print("Gradient Boosting Important Features:")
+print(gb_features)
+
+print(gb_importance.head(15))
+
+```
+
+
+Gradient Boosting Feature Importance identified DAP_20days, Trash(in bundles), Micronutrients_70Days, Potassh_50Days, LP_nurseryarea(in Tonnes), Weed28D_thiobencarb, LP_Mainfield(in Tonnes), Hectares, Urea_40Days, and Seedrate(in Kg) as the most important features for classifying high-yield and low-yield paddy farms.
+
+Among these variables, DAP_20days had the highest importance score (0.3615), followed by Trash(in bundles) (0.2970) and Micronutrients_70Days (0.1121). This indicates that fertilizer application, field residue management, and micronutrient usage are key factors in predicting paddy yield classification.
+
+Compared with Random Forest, Gradient Boosting placed stronger emphasis on a smaller group of highly influential variables, especially DAP_20days and Trash(in bundles). This suggests that boosting models may capture specific dominant patterns in the dataset more strongly than bagging-based models such as Random Forest.
+
+Overall, Gradient Boosting Feature Importance shows that fertilizer management, residue management, land preparation, weed control, and field size are important predictors of high-yield performance in paddy farming.
+
+
+```{python}
+
+# Section 13: Feature Selection Method 5 - Exhaustive Feature Selection
+
+"""
+Exhaustive Feature Selection can be very slow if all features are used.
+To make the code practical in Codespaces, this section only tests the top 8 Random Forest features.
+"""
+
+top_features_for_efs = rf_importance.head(8)["Feature"].tolist()
+
+efs_model = LogisticRegression(max_iter=1000)
+
+efs = EFS(
+    efs_model,
+    min_features=3,
+    max_features=5,
+    scoring="roc_auc",
+    cv=5,
+    print_progress=True
+)
+
+efs.fit(X_encoded_df[top_features_for_efs], y_clf)
+
+exhaustive_features = list(efs.best_feature_names_)
+
+print("Exhaustive Feature Selection Features:")
+print(exhaustive_features)
+
+```
+
+
+Exhaustive Feature Selection evaluated every possible combination of the candidate features and selected the subset that achieved the best classification performance. The optimal feature combination consists of LP_Mainfield(in Tonnes), Pest_60Day(in ml), and Hectares.
+
+The results indicate that land preparation, pest management, and field size are the three most influential factors for distinguishing between high-yield and low-yield paddy farms. These features consistently appeared among the top-ranked variables in previous feature selection methods, demonstrating their strong predictive value.
+
+Compared with the other feature selection techniques, Exhaustive Feature Selection produced the smallest feature subset while maintaining high predictive capability. This suggests that a compact set of carefully selected variables can effectively represent the key information required for paddy yield classification.
+
+Overall, Exhaustive Feature Selection identified the most efficient feature combination, providing a simplified dataset that can reduce model complexity while preserving strong classification performance.
+
+
+
+
+```{python}
+
+# Section 14: Merge Selected Features Using Poincare Formula Logic
+
+"""
+Poincare's formula is related to combining sets using union logic.
+Here, selected features from five methods are merged into one refined feature set.
+Duplicate features are removed.
+"""
+
+selected_feature_sets = [
+    set(forward_features),
+    set(backward_features),
+    set(rf_features),
+    set(gb_features),
+    set(exhaustive_features)
+]
+
+refined_features = sorted(set().union(*selected_feature_sets))
+
+print("Number of refined features:", len(refined_features))
+print("Refined features:")
+print(refined_features)
+
+X_refined = X_encoded_df[refined_features]
+
+
+```
+
+
+The features selected by the five feature selection methods were merged using Poincaré's formula (set union) to create a refined feature set. After removing duplicate variables, a total of 20 unique features were retained for subsequent machine learning modeling.
+
+The refined feature set includes variables related to field size, land preparation, seed rate, fertilizer application, pest and weed management, nursery management, temperature, wind speed, wind direction, and field residue management. The presence of these features across multiple feature selection methods indicates that they consistently contribute to distinguishing between high-yield and low-yield paddy farms.
+
+Compared with the original dataset, the refined dataset significantly reduced the number of input variables while preserving the most informative features identified by different selection techniques. This helps reduce model complexity, improve computational efficiency, and minimize redundant information.
+
+Overall, the refined feature set provides a comprehensive and representative collection of the most important predictors and serves as an effective input for the final machine learning models.
+
+
+
+```{python}
+
+# Section 15: Train ML Models on the Refined Dataset
+
+X_train_ref, X_test_ref, y_train_ref, y_test_ref = train_test_split(
+    X_refined, y_clf, test_size=0.2, random_state=42, stratify=y_clf
+)
+
+refined_models = {
+    "Decision Tree": DecisionTreeClassifier(random_state=42),
+    "Random Forest": RandomForestClassifier(random_state=42, n_estimators=200),
+    "SVM": SVC(probability=True, random_state=42),
+    "KNN": KNeighborsClassifier(n_neighbors=5),
+    "Naive Bayes": GaussianNB()
+}
+
+refined_results = []
+
+for name, model in refined_models.items():
+    model.fit(X_train_ref, y_train_ref)
+    y_pred = model.predict(X_test_ref)
+    y_prob = model.predict_proba(X_test_ref)[:, 1]
+    
+    accuracy = accuracy_score(y_test_ref, y_pred)
+    auc = roc_auc_score(y_test_ref, y_prob)
+    
+    refined_results.append([name, accuracy, auc])
+
+refined_results_df = pd.DataFrame(
+    refined_results,
+    columns=["Model", "Accuracy", "ROC_AUC"]
+)
+
+print(refined_results_df.sort_values(by="ROC_AUC", ascending=False))
+
+```
+
+
+The refined dataset containing the 20 selected features was used to train five classification models: Decision Tree, Random Forest, SVM, KNN, and Naive Bayes. The results demonstrate that feature selection successfully reduced the dimensionality of the dataset while maintaining strong predictive performance.
+
+Decision Tree and Random Forest achieved the highest classification accuracy (91.58%). Among all models, Decision Tree obtained the highest ROC AUC (0.9545), closely followed by Random Forest (0.9544). These results indicate that tree-based models benefited the most from the refined feature set and provided the strongest ability to distinguish between high-yield and low-yield paddy farms.
+
+Compared with the previous classification results using the full feature set, the refined dataset improved the ROC AUC of both Decision Tree and Random Forest while using fewer input variables. This demonstrates that removing redundant features can improve model performance and reduce model complexity.
+
+Overall, the refined feature set effectively preserved the most informative variables identified by the five feature selection methods. Decision Tree was selected as the best model because it achieved both the highest classification accuracy (91.58%) and the highest ROC AUC (0.9545), making it the most effective classifier for the refined dataset.
+
+
+
+```{python}
+
+# Section 16: Final Best Model Using Refined Features
+
+final_best_model_name = refined_results_df.sort_values(
+    by="ROC_AUC", ascending=False
+).iloc[0]["Model"]
+
+final_best_model = refined_models[final_best_model_name]
+
+final_best_model.fit(X_train_ref, y_train_ref)
+final_pred = final_best_model.predict(X_test_ref)
+final_prob = final_best_model.predict_proba(X_test_ref)[:, 1]
+
+print("Final Best Model:", final_best_model_name)
+print("Final Accuracy:", accuracy_score(y_test_ref, final_pred))
+print("Final ROC AUC:", roc_auc_score(y_test_ref, final_prob))
+
+print("Final Classification Report:")
+print(classification_report(y_test_ref, final_pred))
+
+print("Final Confusion Matrix:")
+print(confusion_matrix(y_test_ref, final_pred))
+
+```
+
+After applying feature selection and training the models on the refined dataset, the Decision Tree classifier was identified as the final best-performing model. It achieved an accuracy of 91.58% and the highest ROC AUC of 0.9545, demonstrating excellent ability to distinguish between high-yield and low-yield paddy farms.
+
+The classification report shows balanced performance across both classes, with an overall precision, recall, and F1-score of approximately 0.92. For the low-yield class, the model achieved a precision of 0.97 and a recall of 0.86, while for the high-yield class, it achieved a precision of 0.87 and an excellent recall of 0.97. These results indicate that the model successfully identified the majority of high-yield farms while maintaining high prediction accuracy for low-yield farms.
+
+The confusion matrix further confirms the model's effectiveness, correctly classifying 511 out of 558 samples, with only 47 misclassified observations. This demonstrates that the refined feature set significantly improved the Decision Tree model while reducing the number of input variables.
+
+Overall, the Decision Tree classifier provides the best balance between classification accuracy, discrimination ability, and model simplicity. Therefore, it was selected as the final model for predicting high-yield and low-yield paddy farms.
+
+
+
+# Final Conclusion
+
+This project investigated paddy yield prediction and high-yield classification using agricultural management, weather, soil, irrigation, and environmental variables. Both regression and classification models were developed to evaluate the predictive capability of the dataset.
+
+For the regression task, Random Forest Regressor achieved the best performance with an MAE of 632.34, an RMSE of 887.32, and an R² of 0.9903, demonstrating excellent accuracy in predicting paddy yield.
+
+For the classification task, five machine learning models were evaluated, including Decision Tree, Random Forest, SVM, KNN, and Naive Bayes. Initially, SVM achieved the highest ROC AUC (0.9439), while Decision Tree achieved the highest classification accuracy (91.40%).
+
+To improve model performance and reduce data dimensionality, five feature selection methods—Backward Elimination, Stepwise Forward Selection, Random Forest Feature Importance, Exhaustive Feature Selection, and Gradient Boosting Feature Importance—were applied. The selected features were merged using Poincaré's formula to generate a refined dataset containing 20 representative features.
+
+After retraining the models using the refined dataset, the Decision Tree classifier achieved the best overall performance, with an accuracy of 91.58% and a ROC AUC of 0.9545. Compared with the original feature set, the refined dataset improved model performance while reducing the number of input variables, demonstrating that effective feature selection can enhance both prediction accuracy and computational efficiency.
+
+Overall, the results indicate that agricultural management practices, fertilizer application, land preparation, pest control, and environmental conditions are the most influential factors affecting paddy yield. The proposed machine learning framework provides an effective and interpretable approach for paddy yield prediction and high-yield farm classification, offering valuable support for data-driven agricultural management and decision-making.
